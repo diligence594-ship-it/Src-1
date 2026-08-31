@@ -1,0 +1,58 @@
+{
+  "name": "Save Restricted Content Bot master-v1 branch",
+  "description": "Save Restricted Content Bot by Team SPY",
+  "logo": "https://lh3.googleusercontent.com/-HPcn7AqepNg/AAAAAAAAAAI/AAAAAAAAAAA/ALKGfknb1BkQiq-8_KUVOYcNAJ4swKivDQ/photo.jpg",
+  "keywords": ["python3", "telegram", "MusicBot", "telegram-bot", "pyrogram"],
+  "repository": "https://github.com/devgaganin/save_restricted-content-telegram-bot-repo",
+  "success_url": "https://devgagan.in",
+  "env": {
+    "API_ID": {
+      "description": "Get this value from https://my.telegram.org",
+      "value": "22470912",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Get this value from https://my.telegram.org",
+      "value": "511be78079ed5d4bd4c967bc7b5ee023",
+      "required": true
+    },
+    "BOT_TOKEN": {
+      "description": "A Bot's token from Botfather",
+      "value": "8254141632:AAFvRU6E4amexKzidBe2Ij9pBvkoCYozHNg",
+      "required": true
+    },
+    "MONGO_DB": {
+      "description": "Get a MongoDB URL from https://cloud.mongodb.com.",
+      "value": "mongodb+srv://rohitgolu836:zktcMCsEGQb2oIt2@cluster0.lygabfn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+      "required": true
+    },
+
+    "OWNER_ID": {
+      "description": "The user ID of the user whom you would like",
+      "value": "7678862761",
+      "required": true
+    },
+
+    "STRING": {
+      "description": "Enter session string if you want YOUR USERS not to be forced login and can do things via invite_link",
+      "value": "",
+      "required": false
+    },
+    
+    "FORCE_SUB": {
+      "description": "Enter Channel ID (with -100) and make bot admin there",
+      "value": "-1003878357392",
+      "required": true
+    },
+    "LOG_GROUP": {
+      "description": "Enter Log Channel/Group ID (-100) and make bot admin there",
+      "value": "-1003878357392",
+      "required": true
+    }
+  },
+  "buildpacks": [
+    { "url": "heroku/python" },
+    { "url": "https://github.com/heroku/heroku-buildpack-activestorage-preview" }
+  ],
+  "stack": "container"
+}
