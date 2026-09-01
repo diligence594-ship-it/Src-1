@@ -18,7 +18,7 @@ import json
 from typing import Dict, Any, Optional
 
 Y = None if not STRING else __import__('shared_client').userbot
-Z, P, UB, UC, emp = {}, {}, {}, {}, {}
+Z, P, UC, emp = {}, {}, {}, {}
 
 ACTIVE_USERS = {}
 ACTIVE_USERS_FILE = "active_users.json"
@@ -131,29 +131,13 @@ async def get_msg(c, u, i, d, lt):
         print(f'Error fetching message: {e}')
         return None
 
-async def get_ubot(uid):
-    bt = await get_user_data_key(uid, "bot_token", None)
-    if not bt:
-        return None
-    if uid in UB:
-        return UB.get(uid)
-    try:
-        bot = Client(f"user_{uid}", bot_token=bt, api_id=API_ID, api_hash=API_HASH)
-        await bot.start()
-        UB[uid] = bot
-        return bot
-    except Exception as e:
-        print(f"Error starting bot for user {uid}: {e}")
-        return None
-
 async def get_uclient(uid):
     ud = await get_user_data(uid)
-    ubot = UB.get(uid)
     cl = UC.get(uid)
     if cl:
         return cl
     if not ud:
-        return ubot if ubot else None
+        return Y if Y else X
     xxx = ud.get('session_string')
     if xxx:
         try:
@@ -171,8 +155,8 @@ async def get_uclient(uid):
             return gg
         except Exception as e:
             print(f'User client error: {e}')
-            return ubot if ubot else Y
-    return Y
+            return Y if Y else X
+    return Y if Y else X
 
 async def prog(c, t, C, h, m, st):
     global P
@@ -387,11 +371,6 @@ async def process_cmd(c, m):
         await pro.edit('You have an active task. Use /stop to cancel it.')
         return
 
-    ubot = await get_ubot(uid)
-    if not ubot:
-        await pro.edit('Add your bot with /setbot first')
-        return
-
     Z[uid] = {'step': 'start' if cmd == 'batch' else 'start_single'}
     await pro.edit(f'Send {"start link..." if cmd == "batch" else "link you to process"}.')
 
@@ -408,7 +387,7 @@ async def cancel_cmd(c, m):
 
 @X.on_message(filters.text & filters.private & ~login_in_progress & ~filters.command([
     'start', 'batch', 'cancel', 'login', 'logout', 'stop', 'set',
-    'pay', 'redeem', 'gencode', 'single', 'generate', 'keyinfo', 'encrypt', 'decrypt', 'keys', 'setbot', 'rembot'
+    'pay', 'redeem', 'gencode', 'single', 'generate', 'keyinfo', 'encrypt', 'decrypt', 'keys'
 ]))
 async def text_handler(c, m):
     uid = m.from_user.id
@@ -438,12 +417,6 @@ async def text_handler(c, m):
         i, s, lt = Z[uid]['cid'], Z[uid]['sid'], Z[uid]['lt']
         pt = await m.reply_text('Processing...')
 
-        ubot = UB.get(uid)
-        if not ubot:
-            await pt.edit('Add bot with /setbot first')
-            Z.pop(uid, None)
-            return
-
         uc = await get_uclient(uid)
         if not uc:
             await pt.edit('Cannot proceed without user client.')
@@ -456,9 +429,10 @@ async def text_handler(c, m):
             return
 
         try:
-            msg = await get_msg(ubot, uc, i, s, lt)
+            source_client = X if lt == 'public' else uc
+            msg = await get_msg(source_client, uc, i, s, lt)
             if msg:
-                res = await process_msg(ubot, uc, msg, str(m.chat.id), lt, uid, i)
+                res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
                 await pt.edit(f'1/1: {res}')
             else:
                 await pt.edit('Message not found')
@@ -485,10 +459,9 @@ async def text_handler(c, m):
 
         pt = await m.reply_text('Processing batch...')
         uc = await get_uclient(uid)
-        ubot = UB.get(uid)
 
-        if not uc or not ubot:
-            await pt.edit('Missing client setup')
+        if not uc:
+            await pt.edit('User login/session is required for this batch.')
             Z.pop(uid, None)
             return
 
@@ -517,9 +490,10 @@ async def text_handler(c, m):
                 mid = int(s) + j
 
                 try:
-                    msg = await get_msg(ubot, uc, i, mid, lt)
+                    source_client = X if lt == 'public' else uc
+                    msg = await get_msg(source_client, uc, i, mid, lt)
                     if msg:
-                        res = await process_msg(ubot, uc, msg, str(m.chat.id), lt, uid, i)
+                        res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
                         if 'Done' in res or 'Copied' in res or 'Sent' in res:
                             success += 1
                     else:
