@@ -223,9 +223,13 @@ async def process_msg(c, u, m, d, lt, uid, i):
             user_cap = await get_user_data_key(d, 'caption', '')
             ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
 
-            if lt == 'public' and not emp.get(i, False):
-                await send_direct(c, m, tcid, ft, rtmid)
-                return 'Sent directly.'
+            # Text-only public messages can be copied directly by the bot.
+            # Media must be downloaded through the user client first; the bot may
+            # not have access to the original group's media/file reference.
+            if m.text and lt == 'public' and not emp.get(i, False):
+                sent = await send_direct(c, m, tcid, ft, rtmid)
+                if sent:
+                    return 'Sent directly.'
 
             st = time.time()
             p = await c.send_message(d, 'Downloading...')
