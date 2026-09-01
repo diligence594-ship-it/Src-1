@@ -6,11 +6,12 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.errors import BadRequest, SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired, MessageNotModified
 import logging
+import os
 from config import API_HASH, API_ID
 from shared_client import app as bot
-from utils.func import save_user_session, get_user_data, remove_user_session
+from utils.func import save_user_session, get_user_data, remove_user_session, save_user_bot, remove_user_bot
 from utils.encrypt import ecs, dcs
-from plugins.batch import UC
+from plugins.batch import UB, UC
 from utils.custom_filters import login_in_progress, set_user_step, get_user_step
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,9 +35,67 @@ Example: `+12345678900`"""
     login_cache[user_id] = {'status_msg': status_msg}
     
     
+@bot.on_message(filters.command("setbot"))
+async def set_bot_token(C, m):
+    user_id = m.from_user.id
+    args = m.text.split(" ", 1)
+    if user_id in UB:
+        try:
+            await UB[user_id].stop()
+            if UB.get(user_id, None):
+                del UB[user_id]  # Remove from dictionary
+                
+            try:
+                if os.path.exists(f"user_{user_id}.session"):
+                    os.remove(f"user_{user_id}.session")
+            except Exception:
+                pass
+            
+            print(f"Stopped and removed old bot for user {user_id}")
+        except Exception as e:
+            print(f"Error stopping old bot for user {user_id}: {e}")
+            del UB[user_id]  # Remove from dictionary
+
+    if len(args) < 2:
+        await m.reply_text("⚠️ Please provide a bot token. Usage: `/setbto token`", quote=True)
+        return
+
+    bot_token = args[1].strip()
+    await save_user_bot(user_id, bot_token)
+    await m.reply_text("✅ Bot token saved successfully.", quote=True)
+    
+    
+@bot.on_message(filters.command("rembot"))
+async def rem_bot_token(C, m):
+    user_id = m.from_user.id
+    if user_id in UB:
+        try:
+            await UB[user_id].stop()
+            
+            if UB.get(user_id, None):
+                del UB[user_id]  # Remove from dictionary # Remove from dictionary
+            print(f"Stopped and removed old bot for user {user_id}")
+            try:
+                if os.path.exists(f"user_{user_id}.session"):
+                    os.remove(f"user_{user_id}.session")
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Error stopping old bot for user {user_id}: {e}")
+            if UB.get(user_id, None):
+                del UB[user_id]  # Remove from dictionary  # Remove from dictionary
+            try:
+                if os.path.exists(f"user_{user_id}.session"):
+                    os.remove(f"user_{user_id}.session")
+            except Exception:
+                pass
+    await remove_user_bot(user_id)
+    await m.reply_text("✅ Bot token removed successfully.", quote=True)
+
+    
 @bot.on_message(login_in_progress & filters.text & filters.private & ~filters.command([
     'start', 'batch', 'cancel', 'login', 'logout', 'stop', 'set', 'pay',
-    'redeem', 'gencode', 'generate', 'keyinfo', 'encrypt', 'decrypt', 'keys']))
+    'redeem', 'gencode', 'generate', 'keyinfo', 'encrypt', 'decrypt', 'keys', 'setbot', 'rembot']))
 async def handle_login_steps(client, message):
     user_id = message.from_user.id
     text = message.text.strip()

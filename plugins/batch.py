@@ -18,7 +18,7 @@ import json
 from typing import Dict, Any, Optional
 
 Y = None if not STRING else __import__('shared_client').userbot
-Z, P, UC, emp = {}, {}, {}, {}
+Z, P, UB, UC, emp = {}, {}, {}, {}, {}
 
 ACTIVE_USERS = {}
 ACTIVE_USERS_FILE = "active_users.json"
@@ -131,16 +131,29 @@ async def get_msg(c, u, i, d, lt):
         print(f'Error fetching message: {e}')
         return None
 
+async def get_ubot(uid):
+    bt = await get_user_data_key(uid, "bot_token", None)
+    if not bt:
+        return None
+    if uid in UB:
+        return UB.get(uid)
+    try:
+        bot = Client(f"user_{uid}", bot_token=bt, api_id=API_ID, api_hash=API_HASH)
+        await bot.start()
+        UB[uid] = bot
+        return bot
+    except Exception as e:
+        print(f"Error starting bot for user {uid}: {e}")
+        return None
+
 async def get_uclient(uid):
-    """Return the user's logged-in client when available.
-    The main bot (X) is used for output; no per-user bot token is required.
-    """
     ud = await get_user_data(uid)
+    ubot = UB.get(uid)
     cl = UC.get(uid)
     if cl:
         return cl
     if not ud:
-        return X
+        return ubot if ubot else None
     xxx = ud.get('session_string')
     if xxx:
         try:
@@ -158,8 +171,8 @@ async def get_uclient(uid):
             return gg
         except Exception as e:
             print(f'User client error: {e}')
-            return Y
-    return X
+            return ubot if ubot else Y
+    return Y
 
 async def prog(c, t, C, h, m, st):
     global P
@@ -223,13 +236,9 @@ async def process_msg(c, u, m, d, lt, uid, i):
             user_cap = await get_user_data_key(d, 'caption', '')
             ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
 
-            # Text-only public messages can be copied directly by the bot.
-            # Media must be downloaded through the user client first; the bot may
-            # not have access to the original group's media/file reference.
-            if m.text and lt == 'public' and not emp.get(i, False):
-                sent = await send_direct(c, m, tcid, ft, rtmid)
-                if sent:
-                    return 'Sent directly.'
+            if lt == 'public' and not emp.get(i, False):
+                await send_direct(c, m, tcid, ft, rtmid)
+                return 'Sent directly.'
 
             st = time.time()
             p = await c.send_message(d, 'Downloading...')
@@ -378,6 +387,11 @@ async def process_cmd(c, m):
         await pro.edit('You have an active task. Use /stop to cancel it.')
         return
 
+    ubot = await get_ubot(uid)
+    if not ubot:
+        await pro.edit('Add your bot with /setbot first')
+        return
+
     Z[uid] = {'step': 'start' if cmd == 'batch' else 'start_single'}
     await pro.edit(f'Send {"start link..." if cmd == "batch" else "link you to process"}.')
 
@@ -404,14 +418,9 @@ async def text_handler(c, m):
 
     if s == 'start':
         L = m.text
-        try:
-            i, d, lt = E(L.strip())
-        except Exception as e:
-            await m.reply_text(f'❌ Invalid link. Please send a valid Telegram message link.')
-            Z.pop(uid, None)
-            return
+        i, d, lt = E(L)
         if not i or not d:
-            await m.reply_text('❌ Invalid link. Please send a valid Telegram message link.')
+            await m.reply_text('Invalid link format.')
             Z.pop(uid, None)
             return
         Z[uid].update({'step': 'count', 'cid': i, 'sid': d, 'lt': lt})
@@ -419,14 +428,9 @@ async def text_handler(c, m):
 
     elif s == 'start_single':
         L = m.text
-        try:
-            i, d, lt = E(L.strip())
-        except Exception:
-            await m.reply_text('❌ Invalid link. Please send a valid Telegram message link.')
-            Z.pop(uid, None)
-            return
+        i, d, lt = E(L)
         if not i or not d:
-            await m.reply_text('❌ Invalid link. Please send a valid Telegram message link.')
+            await m.reply_text('Invalid link format.')
             Z.pop(uid, None)
             return
 
@@ -434,9 +438,15 @@ async def text_handler(c, m):
         i, s, lt = Z[uid]['cid'], Z[uid]['sid'], Z[uid]['lt']
         pt = await m.reply_text('Processing...')
 
+        ubot = UB.get(uid)
+        if not ubot:
+            await pt.edit('Add bot with /setbot first')
+            Z.pop(uid, None)
+            return
+
         uc = await get_uclient(uid)
         if not uc:
-            await pt.edit('❌ Please use /login first so I can access the source channel.')
+            await pt.edit('Cannot proceed without user client.')
             Z.pop(uid, None)
             return
 
@@ -446,9 +456,9 @@ async def text_handler(c, m):
             return
 
         try:
-            msg = await get_msg(uc, uc, i, s, lt)
+            msg = await get_msg(ubot, uc, i, s, lt)
             if msg:
-                res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
+                res = await process_msg(ubot, uc, msg, str(m.chat.id), lt, uid, i)
                 await pt.edit(f'1/1: {res}')
             else:
                 await pt.edit('Message not found')
@@ -475,9 +485,10 @@ async def text_handler(c, m):
 
         pt = await m.reply_text('Processing batch...')
         uc = await get_uclient(uid)
+        ubot = UB.get(uid)
 
-        if not uc:
-            await pt.edit('❌ Please use /login first so I can access the source channel.')
+        if not uc or not ubot:
+            await pt.edit('Missing client setup')
             Z.pop(uid, None)
             return
 
@@ -506,9 +517,9 @@ async def text_handler(c, m):
                 mid = int(s) + j
 
                 try:
-                    msg = await get_msg(uc, uc, i, mid, lt)
+                    msg = await get_msg(ubot, uc, i, mid, lt)
                     if msg:
-                        res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
+                        res = await process_msg(ubot, uc, msg, str(m.chat.id), lt, uid, i)
                         if 'Done' in res or 'Copied' in res or 'Sent' in res:
                             success += 1
                     else:

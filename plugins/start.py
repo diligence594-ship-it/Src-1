@@ -63,7 +63,9 @@ async def set(_, message):
     await app.set_bot_commands([
         BotCommand("start", "🚀 Start the bot"),
         BotCommand("batch", "🫠 Extract in bulk"),
+        BotCommand("batchquiz", "📝 Upload MCQs as Telegram quizzes"),
         BotCommand("login", "🔑 Get into the bot"),
+        BotCommand("setbot", "🧸 Add your bot for handling files"),
         BotCommand("logout", "🚪 Get out of the bot"),
         BotCommand("adl", "👻 Download audio from 30+ sites"),
         BotCommand("dl", "💀 Download videos from 30+ sites"),
@@ -71,6 +73,7 @@ async def set(_, message):
         BotCommand("transfer", "💘 Gift premium to others"),
         BotCommand("add", "➕ Add user to premium"),
         BotCommand("rem", "➖ Remove from premium"),
+        BotCommand("rembot", "🤨 Remove your custom bot"),
         BotCommand("settings", "⚙️ Personalize things"),
         BotCommand("plan", "🗓️ Check our premium plans"),
         BotCommand("terms", "🥺 Terms and conditions"),
