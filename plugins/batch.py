@@ -132,12 +132,15 @@ async def get_msg(c, u, i, d, lt):
         return None
 
 async def get_uclient(uid):
+    """Return the user's logged-in client when available.
+    The main bot (X) is used for output; no per-user bot token is required.
+    """
     ud = await get_user_data(uid)
     cl = UC.get(uid)
     if cl:
         return cl
     if not ud:
-        return Y if Y else X
+        return X
     xxx = ud.get('session_string')
     if xxx:
         try:
@@ -155,8 +158,8 @@ async def get_uclient(uid):
             return gg
         except Exception as e:
             print(f'User client error: {e}')
-            return Y if Y else X
-    return Y if Y else X
+            return Y
+    return X
 
 async def prog(c, t, C, h, m, st):
     global P
@@ -387,7 +390,7 @@ async def cancel_cmd(c, m):
 
 @X.on_message(filters.text & filters.private & ~login_in_progress & ~filters.command([
     'start', 'batch', 'cancel', 'login', 'logout', 'stop', 'set',
-    'pay', 'redeem', 'gencode', 'single', 'generate', 'keyinfo', 'encrypt', 'decrypt', 'keys'
+    'pay', 'redeem', 'gencode', 'single', 'generate', 'keyinfo', 'encrypt', 'decrypt', 'keys', 'setbot', 'rembot'
 ]))
 async def text_handler(c, m):
     uid = m.from_user.id
@@ -397,9 +400,14 @@ async def text_handler(c, m):
 
     if s == 'start':
         L = m.text
-        i, d, lt = E(L)
+        try:
+            i, d, lt = E(L.strip())
+        except Exception as e:
+            await m.reply_text(f'❌ Invalid link. Please send a valid Telegram message link.')
+            Z.pop(uid, None)
+            return
         if not i or not d:
-            await m.reply_text('Invalid link format.')
+            await m.reply_text('❌ Invalid link. Please send a valid Telegram message link.')
             Z.pop(uid, None)
             return
         Z[uid].update({'step': 'count', 'cid': i, 'sid': d, 'lt': lt})
@@ -407,9 +415,14 @@ async def text_handler(c, m):
 
     elif s == 'start_single':
         L = m.text
-        i, d, lt = E(L)
+        try:
+            i, d, lt = E(L.strip())
+        except Exception:
+            await m.reply_text('❌ Invalid link. Please send a valid Telegram message link.')
+            Z.pop(uid, None)
+            return
         if not i or not d:
-            await m.reply_text('Invalid link format.')
+            await m.reply_text('❌ Invalid link. Please send a valid Telegram message link.')
             Z.pop(uid, None)
             return
 
@@ -419,7 +432,7 @@ async def text_handler(c, m):
 
         uc = await get_uclient(uid)
         if not uc:
-            await pt.edit('Cannot proceed without user client.')
+            await pt.edit('❌ Please use /login first so I can access the source channel.')
             Z.pop(uid, None)
             return
 
@@ -429,8 +442,7 @@ async def text_handler(c, m):
             return
 
         try:
-            source_client = X if lt == 'public' else uc
-            msg = await get_msg(source_client, uc, i, s, lt)
+            msg = await get_msg(uc, uc, i, s, lt)
             if msg:
                 res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
                 await pt.edit(f'1/1: {res}')
@@ -461,7 +473,7 @@ async def text_handler(c, m):
         uc = await get_uclient(uid)
 
         if not uc:
-            await pt.edit('User login/session is required for this batch.')
+            await pt.edit('❌ Please use /login first so I can access the source channel.')
             Z.pop(uid, None)
             return
 
@@ -490,8 +502,7 @@ async def text_handler(c, m):
                 mid = int(s) + j
 
                 try:
-                    source_client = X if lt == 'public' else uc
-                    msg = await get_msg(source_client, uc, i, mid, lt)
+                    msg = await get_msg(uc, uc, i, mid, lt)
                     if msg:
                         res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
                         if 'Done' in res or 'Copied' in res or 'Sent' in res:
