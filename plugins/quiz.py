@@ -69,7 +69,7 @@ def parse_quiz_text(text: str):
     return out
 
 
-@app.on_message(filters.command('batchquiz') & ~filters.edited)
+@app.on_message(filters.command('batchquiz'))
 async def batchquiz_start(_, message: Message):
     chat_id = message.chat.id
     if chat_id in QUIZ_ACTIVE:
@@ -89,7 +89,7 @@ async def batchquiz_start(_, message: Message):
     )
 
 
-@app.on_message(filters.document & filters.chat & ~filters.edited)
+@app.on_message(filters.document)
 async def batchquiz_file(_, message: Message):
     chat_id = message.chat.id
     state = QUIZ_STATE.get(chat_id)
@@ -164,7 +164,7 @@ async def batchquiz_file(_, message: Message):
                 pass
 
 
-@app.on_message(filters.command('quizstop') & ~filters.edited)
+@app.on_message(filters.command('quizstop'))
 async def quizstop(_, message: Message):
     chat_id = message.chat.id
     if chat_id in QUIZ_ACTIVE:
