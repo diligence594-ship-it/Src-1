@@ -4,7 +4,7 @@
 
 import os, re, time, asyncio
 from pyrogram import Client, filters
-from pyrogram.types import Message, MessageEntity
+from pyrogram.types import Message
 from pyrogram.errors import UserNotParticipant
 from config import API_ID, API_HASH, LOG_GROUP, STRING, FORCE_SUB, FREEMIUM_LIMIT, PREMIUM_LIMIT
 from utils.func import get_user_data, screenshot, thumbnail, get_video_metadata
@@ -180,10 +180,10 @@ async def prog(c, t, C, h, m, st):
         if p >= 100:
             P.pop(m, None)
 
-async def send_direct(c, m, tcid, ft=None, rtmid=None, ft_entities=None):
+async def send_direct(c, m, tcid, ft=None, rtmid=None):
     try:
         if m.video:
-            await c.send_video(tcid, m.video.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, duration=m.video.duration, width=m.video.width, height=m.video.height, reply_to_message_id=rtmid)
+            await c.send_video(tcid, m.video.file_id, caption=ft, duration=m.video.duration, width=m.video.width, height=m.video.height, reply_to_message_id=rtmid)
         elif m.video_note:
             await c.send_video_note(tcid, m.video_note.file_id, reply_to_message_id=rtmid)
         elif m.voice:
@@ -191,136 +191,18 @@ async def send_direct(c, m, tcid, ft=None, rtmid=None, ft_entities=None):
         elif m.sticker:
             await c.send_sticker(tcid, m.sticker.file_id, reply_to_message_id=rtmid)
         elif m.audio:
-            await c.send_audio(tcid, m.audio.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, duration=m.audio.duration, performer=m.audio.performer, title=m.audio.title, reply_to_message_id=rtmid)
+            await c.send_audio(tcid, m.audio.file_id, caption=ft, duration=m.audio.duration, performer=m.audio.performer, title=m.audio.title, reply_to_message_id=rtmid)
         elif m.photo:
             photo_id = m.photo.file_id if hasattr(m.photo, 'file_id') else m.photo[-1].file_id
-            await c.send_photo(tcid, photo_id, caption=ft, caption_entities=ft_entities, parse_mode=None, reply_to_message_id=rtmid)
+            await c.send_photo(tcid, photo_id, caption=ft, reply_to_message_id=rtmid)
         elif m.document:
-            await c.send_document(tcid, m.document.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, file_name=m.document.file_name, reply_to_message_id=rtmid)
+            await c.send_document(tcid, m.document.file_id, caption=ft, file_name=m.document.file_name, reply_to_message_id=rtmid)
         else:
             return False
         return True
     except Exception as e:
         print(f'Direct send error: {e}')
         return False
-
-
-async def process_caption_with_rules(user_id, message):
-    """Replace/delete caption text and rebuild Telegram entities exactly."""
-    if not message.caption:
-        return "", None
-
-    try:
-        replacements = await get_user_data_key(user_id, "replacement_words", {}) or {}
-        delete_words = await get_user_data_key(user_id, "delete_words", []) or {}
-
-        original = message.caption
-        entities = list(message.caption_entities or [])
-
-        # Work in Python character indexes; convert to UTF-16 only when creating
-        # Telegram MessageEntity objects.
-        def u16(s):
-            return len(s.encode("utf-16-le")) // 2
-
-        def u16_to_py(s, target):
-            used = 0
-            for i, ch in enumerate(s):
-                if used >= target:
-                    return i
-                used += u16(ch)
-            return len(s)
-
-        # Each output character carries its original source character index.
-        chars = list(original)
-        origins = list(range(len(original)))
-
-        # Apply replacement in-place with an origin map.
-        for old, new in replacements.items():
-            old, new = str(old), str(new)
-            if not old:
-                continue
-
-            out_chars, out_origins = [], []
-            i = 0
-            while i < len(chars):
-                if ''.join(chars[i:i + len(old)]) == old:
-                    out_chars.extend(new)
-                    base = origins[i] if i < len(origins) else 0
-                    out_origins.extend([base] * len(new))
-                    i += len(old)
-                else:
-                    out_chars.append(chars[i])
-                    out_origins.append(origins[i])
-                    i += 1
-            chars, origins = out_chars, out_origins
-
-        # Delete exact words without split()/join(), preserving all other text.
-        for word in delete_words:
-            word = str(word)
-            if not word:
-                continue
-
-            out_chars, out_origins = [], []
-            i = 0
-            while i < len(chars):
-                if ''.join(chars[i:i + len(word)]) == word:
-                    i += len(word)
-                else:
-                    out_chars.append(chars[i])
-                    out_origins.append(origins[i])
-                    i += 1
-            chars, origins = out_chars, out_origins
-
-        new_text = ''.join(chars)
-
-        if not entities:
-            return new_text, None
-
-        rebuilt = []
-
-        for ent in entities:
-            try:
-                old_start = u16_to_py(original, ent.offset)
-                old_end = u16_to_py(original, ent.offset + ent.length)
-
-                # Entity covers all output chars whose source character was in
-                # the original entity range. This also covers a replaced word:
-                # the NEW visible word inherits the old hyperlink.
-                indexes = [
-                    i for i, src_idx in enumerate(origins)
-                    if old_start <= src_idx < old_end
-                ]
-
-                if not indexes:
-                    continue
-
-                new_start = min(indexes)
-                new_end = max(indexes) + 1
-                visible = new_text[new_start:new_end]
-
-                kwargs = {
-                    "type": ent.type,
-                    "offset": u16(new_text[:new_start]),
-                    "length": u16(visible),
-                }
-
-                # Preserve the entity's destination/metadata.
-                for field in ("url", "user", "language", "custom_emoji_id"):
-                    value = getattr(ent, field, None)
-                    if value is not None:
-                        kwargs[field] = value
-
-                rebuilt.append(MessageEntity(**kwargs))
-
-            except Exception as e:
-                print(f"Caption entity rebuild warning: {e}")
-
-        return new_text, rebuilt or None
-
-    except Exception as e:
-        print(f"Error processing caption with entities: {e}")
-        return message.caption, message.caption_entities
-
 
 async def process_msg(c, u, m, d, lt, uid, i):
     try:
@@ -336,33 +218,16 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 tcid = int(cfg_chat)
 
         if m.media:
-            proc_text, proc_entities = await process_caption_with_rules(d, m)
+            orig_text = m.caption.markdown if m.caption else ''
+            proc_text = await process_text_with_rules(d, orig_text)
             user_cap = await get_user_data_key(d, 'caption', '')
             ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
-            ft_entities = proc_entities
-            if proc_entities and user_cap:
-                # proc_text remains at the beginning of ft, so its offsets stay unchanged.
-                shifted = []
-                for ent in proc_entities:
-                    shifted.append(
-                        MessageEntity(
-                            type=ent.type,
-                            offset=ent.offset,
-                            length=ent.length,
-                            url=getattr(ent, 'url', None),
-                            user=getattr(ent, 'user', None),
-                            language=getattr(ent, 'language', None),
-                            custom_emoji_id=getattr(ent, 'custom_emoji_id', None),
-                        )
-                    )
-                ft_entities = shifted
-
 
             # Text-only public messages can be copied directly by the bot.
             # Media must be downloaded through the user client first; the bot may
             # not have access to the original group's media/file reference.
             if m.text and lt == 'public' and not emp.get(i, False):
-                sent = await send_direct(c, m, tcid, ft, rtmid, ft_entities)
+                sent = await send_direct(c, m, tcid, ft, rtmid)
                 if sent:
                     return 'Sent directly.'
 
@@ -409,8 +274,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
                             height=h if mtype == 'video' else None,
                             width=w if mtype == 'video' else None,
                             caption=ft if m.caption and mtype not in ['video_note', 'voice'] else None,
-                            caption_entities=ft_entities if m.caption and mtype not in ['video_note', 'voice'] else None,
-                            parse_mode=None,
                             reply_to_message_id=rtmid,
                             progress=prog,
                             progress_args=(c, d, p.id, st)
@@ -442,7 +305,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
                     th = await screenshot(f, dur, d)
                     await c.send_video(
                         tcid, video=f, caption=ft if m.caption else None,
-                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         thumb=th, width=w, height=h, duration=dur,
                         progress=prog, progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -464,7 +326,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 elif m.audio:
                     await c.send_audio(
                         tcid, audio=f, caption=ft if m.caption else None,
-                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         thumb=th, progress=prog,
                         progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -472,7 +333,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 elif m.photo:
                     await c.send_photo(
                         tcid, photo=f, caption=ft if m.caption else None,
-                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         progress=prog,
                         progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -480,7 +340,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 else:
                     await c.send_document(
                         tcid, document=f, caption=ft if m.caption else None,
-                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         progress=prog,
                         progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -497,12 +356,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
             return 'Done.'
 
         elif m.text:
-            proc_text = await process_text_with_rules(d, m.text.markdown)
-            await c.send_message(
-                tcid,
-                text=proc_text,
-                reply_to_message_id=rtmid
-            )
+            await c.send_message(tcid, text=m.text.markdown, reply_to_message_id=rtmid)
             return 'Sent.'
     except Exception as e:
         return f'Error: {str(e)[:50]}'
@@ -657,16 +511,8 @@ async def text_handler(c, m):
                         res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
                         if 'Done' in res or 'Copied' in res or 'Sent' in res:
                             success += 1
-                        else:
-                            try:
-                                await pt.edit(f'{j+1}/{n}: {res}')
-                            except:
-                                pass
                     else:
-                        try:
-                            await pt.edit(f'{j+1}/{n}: Message not found / inaccessible')
-                        except:
-                            pass
+                        pass
                 except Exception as e:
                     try:
                         await pt.edit(f'{j+1}/{n}: Error - {str(e)[:30]}')
