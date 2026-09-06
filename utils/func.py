@@ -185,32 +185,30 @@ async def remove_user_bot(user_id):
         return False
 
 
-async def process_text_with_rules(user_id, text):
-    if not text:
-        return ""
-    
+async def process_text(user_id, text):
     try:
         replacements = await get_user_data_key(user_id, "replacement_words", {})
         delete_words = await get_user_data_key(user_id, "delete_words", [])
         
         processed_text = text
-        # Remove invisible/zero-width characters
-processed_text = processed_text.replace("\u2063", "")
-processed_text = processed_text.replace("\u200b", "")
-processed_text = processed_text.replace("\u200c", "")
-processed_text = processed_text.replace("\u200d", "")
-        for word, replacement in replacements.items():
-            processed_text = processed_text.replace(word, replacement)
         
+        # 1. Zero-width / Invisible characters remove karna
+        invisible_chars = ["\u2063", "\u200b", "\u200c", "\u200d"]
+        for char in invisible_chars:
+            processed_text = processed_text.replace(char, "")
+        
+        # 2. Replacement Words (Exact word match ke liye Regex)
+        for word, replacement in replacements.items():
+            pattern = rf"\b{re.escape(word)}\b"
+            processed_text = re.sub(pattern, replacement, processed_text)
+        
+        # 3. Delete Words
         if delete_words:
             words = processed_text.split()
             filtered_words = [w for w in words if w not in delete_words]
             processed_text = " ".join(filtered_words)
         
         return processed_text
-    except Exception as e:
-        logger.error(f"Error processing text with rules: {e}")
-        return text
 
 
 async def screenshot(video: str, duration: int, sender: str) -> str | None:
