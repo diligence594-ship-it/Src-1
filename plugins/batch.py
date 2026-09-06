@@ -221,7 +221,10 @@ async def process_msg(c, u, m, d, lt, uid, i):
             orig_text = m.caption.markdown if m.caption else ''
             proc_text = await process_text_with_rules(d, orig_text)
             user_cap = await get_user_data_key(d, 'caption', '')
-            ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
+            
+    # Text aur Caption dono ko combine karke extra trailing __ strip kar do
+    raw_ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
+    ft = raw_ft.rstrip('_ ').strip()
 
             # Text-only public messages can be copied directly by the bot.
             # Media must be downloaded through the user client first; the bot may
