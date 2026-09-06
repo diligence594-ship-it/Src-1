@@ -206,121 +206,116 @@ async def send_direct(c, m, tcid, ft=None, rtmid=None, ft_entities=None):
 
 
 async def process_caption_with_rules(user_id, message):
-    """Process caption while preserving Telegram formatting and text hyperlinks."""
+    """Replace/delete caption text and rebuild Telegram entities exactly."""
     if not message.caption:
         return "", None
 
     try:
         replacements = await get_user_data_key(user_id, "replacement_words", {}) or {}
-        delete_words = await get_user_data_key(user_id, "delete_words", []) or []
+        delete_words = await get_user_data_key(user_id, "delete_words", []) or {}
 
         original = message.caption
-        chars = list(original)
-        mapping = list(range(len(chars)))
+        entities = list(message.caption_entities or [])
 
-        # Apply replacements while keeping a map from every output character
-        # to the original character position.
-        for word, replacement in replacements.items():
-            word = str(word)
-            replacement = str(replacement)
-            if not word:
+        # Work in Python character indexes; convert to UTF-16 only when creating
+        # Telegram MessageEntity objects.
+        def u16(s):
+            return len(s.encode("utf-16-le")) // 2
+
+        def u16_to_py(s, target):
+            used = 0
+            for i, ch in enumerate(s):
+                if used >= target:
+                    return i
+                used += u16(ch)
+            return len(s)
+
+        # Each output character carries its original source character index.
+        chars = list(original)
+        origins = list(range(len(original)))
+
+        # Apply replacement in-place with an origin map.
+        for old, new in replacements.items():
+            old, new = str(old), str(new)
+            if not old:
                 continue
 
-            new_chars = []
-            new_map = []
-            pos = 0
-            while pos < len(chars):
-                current = ''.join(chars[pos:pos + len(word)])
-                if current == word and len(word) > 0:
-                    new_chars.extend(list(replacement))
-                    # All replacement characters belong to the replaced span.
-                    new_map.extend([mapping[pos]] * len(replacement))
-                    pos += len(word)
+            out_chars, out_origins = [], []
+            i = 0
+            while i < len(chars):
+                if ''.join(chars[i:i + len(old)]) == old:
+                    out_chars.extend(new)
+                    base = origins[i] if i < len(origins) else 0
+                    out_origins.extend([base] * len(new))
+                    i += len(old)
                 else:
-                    new_chars.append(chars[pos])
-                    new_map.append(mapping[pos])
-                    pos += 1
-            chars, mapping = new_chars, new_map
+                    out_chars.append(chars[i])
+                    out_origins.append(origins[i])
+                    i += 1
+            chars, origins = out_chars, out_origins
 
-        # Delete words without using split(), so punctuation, spaces and
-        # Telegram entity ranges are not accidentally destroyed.
+        # Delete exact words without split()/join(), preserving all other text.
         for word in delete_words:
             word = str(word)
             if not word:
                 continue
-            new_chars = []
-            new_map = []
-            pos = 0
-            while pos < len(chars):
-                current = ''.join(chars[pos:pos + len(word)])
-                if current == word:
-                    pos += len(word)
-                else:
-                    new_chars.append(chars[pos])
-                    new_map.append(mapping[pos])
-                    pos += 1
-            chars, mapping = new_chars, new_map
 
-        transformed = ''.join(chars)
-        entities = list(message.caption_entities or [])
+            out_chars, out_origins = [], []
+            i = 0
+            while i < len(chars):
+                if ''.join(chars[i:i + len(word)]) == word:
+                    i += len(word)
+                else:
+                    out_chars.append(chars[i])
+                    out_origins.append(origins[i])
+                    i += 1
+            chars, origins = out_chars, out_origins
+
+        new_text = ''.join(chars)
 
         if not entities:
-            return transformed, None
-
-        def utf16_len(s):
-            return len(s.encode("utf-16-le")) // 2
-
-        def utf16_to_py_index(s, target):
-            used = 0
-            for idx, ch in enumerate(s):
-                if used >= target:
-                    return idx
-                used += utf16_len(ch)
-            return len(s)
+            return new_text, None
 
         rebuilt = []
 
-        for entity in entities:
+        for ent in entities:
             try:
-                old_start = utf16_to_py_index(original, entity.offset)
-                old_end = utf16_to_py_index(
-                    original, entity.offset + entity.length
-                )
+                old_start = u16_to_py(original, ent.offset)
+                old_end = u16_to_py(original, ent.offset + ent.length)
 
-                # Find output characters that originated inside this entity.
-                positions = [
-                    idx for idx, origin in enumerate(mapping)
-                    if old_start <= origin < old_end
+                # Entity covers all output chars whose source character was in
+                # the original entity range. This also covers a replaced word:
+                # the NEW visible word inherits the old hyperlink.
+                indexes = [
+                    i for i, src_idx in enumerate(origins)
+                    if old_start <= src_idx < old_end
                 ]
 
-                if not positions:
+                if not indexes:
                     continue
 
-                new_start = min(positions)
-                new_end = max(positions) + 1
-                visible = transformed[new_start:new_end]
+                new_start = min(indexes)
+                new_end = max(indexes) + 1
+                visible = new_text[new_start:new_end]
 
-                # Build only fields valid for the entity type.
                 kwargs = {
-                    "type": entity.type,
-                    "offset": utf16_len(transformed[:new_start]),
-                    "length": utf16_len(visible),
+                    "type": ent.type,
+                    "offset": u16(new_text[:new_start]),
+                    "length": u16(visible),
                 }
 
-                if getattr(entity, "url", None):
-                    kwargs["url"] = entity.url
-                if getattr(entity, "user", None):
-                    kwargs["user"] = entity.user
-                if getattr(entity, "language", None):
-                    kwargs["language"] = entity.language
-                if getattr(entity, "custom_emoji_id", None):
-                    kwargs["custom_emoji_id"] = entity.custom_emoji_id
+                # Preserve the entity's destination/metadata.
+                for field in ("url", "user", "language", "custom_emoji_id"):
+                    value = getattr(ent, field, None)
+                    if value is not None:
+                        kwargs[field] = value
 
                 rebuilt.append(MessageEntity(**kwargs))
+
             except Exception as e:
                 print(f"Caption entity rebuild warning: {e}")
 
-        return transformed, rebuilt or None
+        return new_text, rebuilt or None
 
     except Exception as e:
         print(f"Error processing caption with entities: {e}")
