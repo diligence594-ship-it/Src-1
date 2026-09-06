@@ -4,7 +4,7 @@
 
 import os, re, time, asyncio
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, MessageEntity
 from pyrogram.errors import UserNotParticipant
 from config import API_ID, API_HASH, LOG_GROUP, STRING, FORCE_SUB, FREEMIUM_LIMIT, PREMIUM_LIMIT
 from utils.func import get_user_data, screenshot, thumbnail, get_video_metadata
@@ -183,7 +183,7 @@ async def prog(c, t, C, h, m, st):
 async def send_direct(c, m, tcid, ft=None, rtmid=None):
     try:
         if m.video:
-            await c.send_video(tcid, m.video.file_id, caption=ft, duration=m.video.duration, width=m.video.width, height=m.video.height, reply_to_message_id=rtmid)
+            await c.send_video(tcid, m.video.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, duration=m.video.duration, width=m.video.width, height=m.video.height, reply_to_message_id=rtmid)
         elif m.video_note:
             await c.send_video_note(tcid, m.video_note.file_id, reply_to_message_id=rtmid)
         elif m.voice:
@@ -191,18 +191,142 @@ async def send_direct(c, m, tcid, ft=None, rtmid=None):
         elif m.sticker:
             await c.send_sticker(tcid, m.sticker.file_id, reply_to_message_id=rtmid)
         elif m.audio:
-            await c.send_audio(tcid, m.audio.file_id, caption=ft, duration=m.audio.duration, performer=m.audio.performer, title=m.audio.title, reply_to_message_id=rtmid)
+            await c.send_audio(tcid, m.audio.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, duration=m.audio.duration, performer=m.audio.performer, title=m.audio.title, reply_to_message_id=rtmid)
         elif m.photo:
             photo_id = m.photo.file_id if hasattr(m.photo, 'file_id') else m.photo[-1].file_id
-            await c.send_photo(tcid, photo_id, caption=ft, reply_to_message_id=rtmid)
+            await c.send_photo(tcid, photo_id, caption=ft, caption_entities=ft_entities, parse_mode=None, reply_to_message_id=rtmid)
         elif m.document:
-            await c.send_document(tcid, m.document.file_id, caption=ft, file_name=m.document.file_name, reply_to_message_id=rtmid)
+            await c.send_document(tcid, m.document.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, file_name=m.document.file_name, reply_to_message_id=rtmid)
         else:
             return False
         return True
     except Exception as e:
         print(f'Direct send error: {e}')
         return False
+
+
+async def process_caption_with_rules(user_id, message):
+    """
+    Process caption text while preserving Telegram entities such as
+    text hyperlinks. Entity offsets are rebuilt from the transformed
+    caption so linked visible text can also be replaced.
+    """
+    if not message.caption:
+        return "", None
+
+    try:
+        replacements = await get_user_data_key(
+            user_id, "replacement_words", {}
+        )
+        delete_words = await get_user_data_key(
+            user_id, "delete_words", []
+        )
+
+        original = message.caption
+        text = original
+
+        # Build a character mapping from old text positions to new text
+        # positions. This lets us preserve entities even when replacement
+        # changes the length of the visible text.
+        pieces = []
+        entities = list(message.caption_entities or [])
+
+        # Mark every original UTF-16 code-unit position as Python character
+        # positions. Telegram entities use UTF-16 offsets.
+        def utf16_len(s):
+            return len(s.encode("utf-16-le")) // 2
+
+        # Transform the whole caption first.
+        for word, replacement in replacements.items():
+            text = text.replace(str(word), str(replacement))
+
+        if delete_words:
+            for word in delete_words:
+                text = text.replace(str(word), "")
+
+        if not entities:
+            return text, None
+
+        # For entity-bearing text, transform each entity's visible span
+        # independently and then locate the resulting spans in the final
+        # text. This is especially important for MessageEntityTextUrl.
+        transformed_entities = []
+
+        # Calculate Python-character boundaries from Telegram's UTF-16
+        # offsets.
+        def py_index_from_utf16(s, target):
+            used = 0
+            for idx, ch in enumerate(s):
+                if used >= target:
+                    return idx
+                used += utf16_len(ch)
+            return len(s)
+
+        for entity in entities:
+            try:
+                start = py_index_from_utf16(original, entity.offset)
+                end = py_index_from_utf16(
+                    original, entity.offset + entity.length
+                )
+
+                visible_old = original[start:end]
+                visible_new = visible_old
+
+                for word, replacement in replacements.items():
+                    visible_new = visible_new.replace(
+                        str(word), str(replacement)
+                    )
+
+                if delete_words:
+                    for word in delete_words:
+                        visible_new = visible_new.replace(
+                            str(word), ""
+                        )
+
+                # Find this entity's transformed visible text in the final
+                # caption. Prefer the position corresponding to the original
+                # entity start.
+                prefix_old = original[:start]
+                prefix_new = prefix_old
+                for word, replacement in replacements.items():
+                    prefix_new = prefix_new.replace(
+                        str(word), str(replacement)
+                    )
+                if delete_words:
+                    for word in delete_words:
+                        prefix_new = prefix_new.replace(str(word), "")
+
+                new_start = len(prefix_new)
+
+                # If deletion/replacement makes the text ambiguous, search
+                # near the expected position.
+                if visible_new:
+                    found = text.find(visible_new, max(0, new_start - 2))
+                    if found != -1:
+                        new_start = found
+
+                new_entity = MessageEntity(
+                    type=entity.type,
+                    offset=utf16_len(text[:new_start]),
+                    length=utf16_len(visible_new),
+                    url=getattr(entity, "url", None),
+                    user=getattr(entity, "user", None),
+                    language=getattr(entity, "language", None),
+                    custom_emoji_id=getattr(entity, "custom_emoji_id", None),
+                )
+                transformed_entities.append(new_entity)
+
+            except Exception as e:
+                logger.warning(
+                    f"Could not rebuild caption entity: {e}"
+                )
+
+        return text, transformed_entities
+
+    except Exception as e:
+        logger.error(f"Error processing caption with entities: {e}")
+        return message.caption, message.caption_entities
+
 
 async def process_msg(c, u, m, d, lt, uid, i):
     try:
@@ -218,10 +342,10 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 tcid = int(cfg_chat)
 
         if m.media:
-            orig_text = m.caption.markdown if m.caption else ''
-            proc_text = await process_text_with_rules(d, orig_text)
+            proc_text, proc_entities = await process_caption_with_rules(d, m)
             user_cap = await get_user_data_key(d, 'caption', '')
             ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
+            ft_entities = proc_entities if not user_cap else None
 
             # Text-only public messages can be copied directly by the bot.
             # Media must be downloaded through the user client first; the bot may
@@ -274,6 +398,8 @@ async def process_msg(c, u, m, d, lt, uid, i):
                             height=h if mtype == 'video' else None,
                             width=w if mtype == 'video' else None,
                             caption=ft if m.caption and mtype not in ['video_note', 'voice'] else None,
+                            caption_entities=ft_entities if m.caption and mtype not in ['video_note', 'voice'] else None,
+                            parse_mode=None,
                             reply_to_message_id=rtmid,
                             progress=prog,
                             progress_args=(c, d, p.id, st)
@@ -305,6 +431,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                     th = await screenshot(f, dur, d)
                     await c.send_video(
                         tcid, video=f, caption=ft if m.caption else None,
+                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         thumb=th, width=w, height=h, duration=dur,
                         progress=prog, progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -326,6 +453,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 elif m.audio:
                     await c.send_audio(
                         tcid, audio=f, caption=ft if m.caption else None,
+                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         thumb=th, progress=prog,
                         progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -333,6 +461,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 elif m.photo:
                     await c.send_photo(
                         tcid, photo=f, caption=ft if m.caption else None,
+                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         progress=prog,
                         progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
@@ -340,6 +469,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 else:
                     await c.send_document(
                         tcid, document=f, caption=ft if m.caption else None,
+                         caption_entities=ft_entities if m.caption else None, parse_mode=None,
                         progress=prog,
                         progress_args=(c, d, p.id, st),
                         reply_to_message_id=rtmid
