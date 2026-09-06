@@ -194,6 +194,11 @@ async def process_text_with_rules(user_id, text):
         delete_words = await get_user_data_key(user_id, "delete_words", [])
         
         processed_text = text
+        # Remove invisible/zero-width characters
+processed_text = processed_text.replace("\u2063", "")
+processed_text = processed_text.replace("\u200b", "")
+processed_text = processed_text.replace("\u200c", "")
+processed_text = processed_text.replace("\u200d", "")
         for word, replacement in replacements.items():
             processed_text = processed_text.replace(word, replacement)
         
