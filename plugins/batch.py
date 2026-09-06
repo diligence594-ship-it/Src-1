@@ -180,7 +180,7 @@ async def prog(c, t, C, h, m, st):
         if p >= 100:
             P.pop(m, None)
 
-async def send_direct(c, m, tcid, ft=None, rtmid=None):
+async def send_direct(c, m, tcid, ft=None, rtmid=None, ft_entities=None):
     try:
         if m.video:
             await c.send_video(tcid, m.video.file_id, caption=ft, caption_entities=ft_entities, parse_mode=None, duration=m.video.duration, width=m.video.width, height=m.video.height, reply_to_message_id=rtmid)
@@ -206,55 +206,71 @@ async def send_direct(c, m, tcid, ft=None, rtmid=None):
 
 
 async def process_caption_with_rules(user_id, message):
-    """
-    Process caption text while preserving Telegram entities such as
-    text hyperlinks. Entity offsets are rebuilt from the transformed
-    caption so linked visible text can also be replaced.
-    """
+    """Process caption while preserving Telegram formatting and text hyperlinks."""
     if not message.caption:
         return "", None
 
     try:
-        replacements = await get_user_data_key(
-            user_id, "replacement_words", {}
-        )
-        delete_words = await get_user_data_key(
-            user_id, "delete_words", []
-        )
+        replacements = await get_user_data_key(user_id, "replacement_words", {}) or {}
+        delete_words = await get_user_data_key(user_id, "delete_words", []) or []
 
         original = message.caption
-        text = original
+        chars = list(original)
+        mapping = list(range(len(chars)))
 
-        # Build a character mapping from old text positions to new text
-        # positions. This lets us preserve entities even when replacement
-        # changes the length of the visible text.
-        pieces = []
+        # Apply replacements while keeping a map from every output character
+        # to the original character position.
+        for word, replacement in replacements.items():
+            word = str(word)
+            replacement = str(replacement)
+            if not word:
+                continue
+
+            new_chars = []
+            new_map = []
+            pos = 0
+            while pos < len(chars):
+                current = ''.join(chars[pos:pos + len(word)])
+                if current == word and len(word) > 0:
+                    new_chars.extend(list(replacement))
+                    # All replacement characters belong to the replaced span.
+                    new_map.extend([mapping[pos]] * len(replacement))
+                    pos += len(word)
+                else:
+                    new_chars.append(chars[pos])
+                    new_map.append(mapping[pos])
+                    pos += 1
+            chars, mapping = new_chars, new_map
+
+        # Delete words without using split(), so punctuation, spaces and
+        # Telegram entity ranges are not accidentally destroyed.
+        for word in delete_words:
+            word = str(word)
+            if not word:
+                continue
+            new_chars = []
+            new_map = []
+            pos = 0
+            while pos < len(chars):
+                current = ''.join(chars[pos:pos + len(word)])
+                if current == word:
+                    pos += len(word)
+                else:
+                    new_chars.append(chars[pos])
+                    new_map.append(mapping[pos])
+                    pos += 1
+            chars, mapping = new_chars, new_map
+
+        transformed = ''.join(chars)
         entities = list(message.caption_entities or [])
 
-        # Mark every original UTF-16 code-unit position as Python character
-        # positions. Telegram entities use UTF-16 offsets.
+        if not entities:
+            return transformed, None
+
         def utf16_len(s):
             return len(s.encode("utf-16-le")) // 2
 
-        # Transform the whole caption first.
-        for word, replacement in replacements.items():
-            text = text.replace(str(word), str(replacement))
-
-        if delete_words:
-            for word in delete_words:
-                text = text.replace(str(word), "")
-
-        if not entities:
-            return text, None
-
-        # For entity-bearing text, transform each entity's visible span
-        # independently and then locate the resulting spans in the final
-        # text. This is especially important for MessageEntityTextUrl.
-        transformed_entities = []
-
-        # Calculate Python-character boundaries from Telegram's UTF-16
-        # offsets.
-        def py_index_from_utf16(s, target):
+        def utf16_to_py_index(s, target):
             used = 0
             for idx, ch in enumerate(s):
                 if used >= target:
@@ -262,69 +278,52 @@ async def process_caption_with_rules(user_id, message):
                 used += utf16_len(ch)
             return len(s)
 
+        rebuilt = []
+
         for entity in entities:
             try:
-                start = py_index_from_utf16(original, entity.offset)
-                end = py_index_from_utf16(
+                old_start = utf16_to_py_index(original, entity.offset)
+                old_end = utf16_to_py_index(
                     original, entity.offset + entity.length
                 )
 
-                visible_old = original[start:end]
-                visible_new = visible_old
+                # Find output characters that originated inside this entity.
+                positions = [
+                    idx for idx, origin in enumerate(mapping)
+                    if old_start <= origin < old_end
+                ]
 
-                for word, replacement in replacements.items():
-                    visible_new = visible_new.replace(
-                        str(word), str(replacement)
-                    )
+                if not positions:
+                    continue
 
-                if delete_words:
-                    for word in delete_words:
-                        visible_new = visible_new.replace(
-                            str(word), ""
-                        )
+                new_start = min(positions)
+                new_end = max(positions) + 1
+                visible = transformed[new_start:new_end]
 
-                # Find this entity's transformed visible text in the final
-                # caption. Prefer the position corresponding to the original
-                # entity start.
-                prefix_old = original[:start]
-                prefix_new = prefix_old
-                for word, replacement in replacements.items():
-                    prefix_new = prefix_new.replace(
-                        str(word), str(replacement)
-                    )
-                if delete_words:
-                    for word in delete_words:
-                        prefix_new = prefix_new.replace(str(word), "")
+                # Build only fields valid for the entity type.
+                kwargs = {
+                    "type": entity.type,
+                    "offset": utf16_len(transformed[:new_start]),
+                    "length": utf16_len(visible),
+                }
 
-                new_start = len(prefix_new)
+                if getattr(entity, "url", None):
+                    kwargs["url"] = entity.url
+                if getattr(entity, "user", None):
+                    kwargs["user"] = entity.user
+                if getattr(entity, "language", None):
+                    kwargs["language"] = entity.language
+                if getattr(entity, "custom_emoji_id", None):
+                    kwargs["custom_emoji_id"] = entity.custom_emoji_id
 
-                # If deletion/replacement makes the text ambiguous, search
-                # near the expected position.
-                if visible_new:
-                    found = text.find(visible_new, max(0, new_start - 2))
-                    if found != -1:
-                        new_start = found
-
-                new_entity = MessageEntity(
-                    type=entity.type,
-                    offset=utf16_len(text[:new_start]),
-                    length=utf16_len(visible_new),
-                    url=getattr(entity, "url", None),
-                    user=getattr(entity, "user", None),
-                    language=getattr(entity, "language", None),
-                    custom_emoji_id=getattr(entity, "custom_emoji_id", None),
-                )
-                transformed_entities.append(new_entity)
-
+                rebuilt.append(MessageEntity(**kwargs))
             except Exception as e:
-                logger.warning(
-                    f"Could not rebuild caption entity: {e}"
-                )
+                print(f"Caption entity rebuild warning: {e}")
 
-        return text, transformed_entities
+        return transformed, rebuilt or None
 
     except Exception as e:
-        logger.error(f"Error processing caption with entities: {e}")
+        print(f"Error processing caption with entities: {e}")
         return message.caption, message.caption_entities
 
 
@@ -345,13 +344,30 @@ async def process_msg(c, u, m, d, lt, uid, i):
             proc_text, proc_entities = await process_caption_with_rules(d, m)
             user_cap = await get_user_data_key(d, 'caption', '')
             ft = f'{proc_text}\n\n{user_cap}' if proc_text and user_cap else user_cap if user_cap else proc_text
-            ft_entities = proc_entities if not user_cap else None
+            ft_entities = proc_entities
+            if proc_entities and user_cap:
+                # proc_text remains at the beginning of ft, so its offsets stay unchanged.
+                shifted = []
+                for ent in proc_entities:
+                    shifted.append(
+                        MessageEntity(
+                            type=ent.type,
+                            offset=ent.offset,
+                            length=ent.length,
+                            url=getattr(ent, 'url', None),
+                            user=getattr(ent, 'user', None),
+                            language=getattr(ent, 'language', None),
+                            custom_emoji_id=getattr(ent, 'custom_emoji_id', None),
+                        )
+                    )
+                ft_entities = shifted
+
 
             # Text-only public messages can be copied directly by the bot.
             # Media must be downloaded through the user client first; the bot may
             # not have access to the original group's media/file reference.
             if m.text and lt == 'public' and not emp.get(i, False):
-                sent = await send_direct(c, m, tcid, ft, rtmid)
+                sent = await send_direct(c, m, tcid, ft, rtmid, ft_entities)
                 if sent:
                     return 'Sent directly.'
 
@@ -486,7 +502,12 @@ async def process_msg(c, u, m, d, lt, uid, i):
             return 'Done.'
 
         elif m.text:
-            await c.send_message(tcid, text=m.text.markdown, reply_to_message_id=rtmid)
+            proc_text = await process_text_with_rules(d, m.text.markdown)
+            await c.send_message(
+                tcid,
+                text=proc_text,
+                reply_to_message_id=rtmid
+            )
             return 'Sent.'
     except Exception as e:
         return f'Error: {str(e)[:50]}'
@@ -641,8 +662,16 @@ async def text_handler(c, m):
                         res = await process_msg(X, uc, msg, str(m.chat.id), lt, uid, i)
                         if 'Done' in res or 'Copied' in res or 'Sent' in res:
                             success += 1
+                        else:
+                            try:
+                                await pt.edit(f'{j+1}/{n}: {res}')
+                            except:
+                                pass
                     else:
-                        pass
+                        try:
+                            await pt.edit(f'{j+1}/{n}: Message not found / inaccessible')
+                        except:
+                            pass
                 except Exception as e:
                     try:
                         await pt.edit(f'{j+1}/{n}: Error - {str(e)[:30]}')
